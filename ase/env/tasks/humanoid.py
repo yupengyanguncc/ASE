@@ -184,6 +184,12 @@ class Humanoid(BaseTask):
                                               gymtorch.unwrap_tensor(self._dof_state),
                                               gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
         
+        dof_pos = self._dof_state[..., :, 0]
+        dof_pos = dof_pos.contiguous()
+        self.gym.set_dof_position_target_tensor_indexed(self.sim,
+                                                      gymtorch.unwrap_tensor(dof_pos),
+                                                      gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+
         self.progress_buf[env_ids] = 0
         self.reset_buf[env_ids] = 0
         self._terminate_buf[env_ids] = 0
