@@ -30,6 +30,8 @@ from isaacgym.torch_utils import *
 import torch
 import json
 import numpy as np
+import argparse
+import os
 
 from poselib.core.rotation3d import *
 from poselib.skeleton.skeleton3d import SkeletonTree, SkeletonState, SkeletonMotion
@@ -46,8 +48,6 @@ Data required for retargeting are stored in a retarget config dictionary as a js
   - rotation: root rotation offset from source to target skeleton (for transforming across different orientation axes), represented as a quaternion in XYZW order.
   - scale: scale offset from source to target skeleton
 """
-
-VISUALIZE = False
 
 def project_joints(motion):
     right_upper_arm_id = motion.skeleton_tree._node_indices["right_upper_arm"]
@@ -204,79 +204,102 @@ def project_joints(motion):
 
 
 def main():
-    # load retarget config
-    retarget_data_path = "data/configs/retarget_cmu_to_amp.json"
-    with open(retarget_data_path) as f:
-        retarget_data = json.load(f)
+    parser = argparse.ArgumentParser(description='动作重定向工具')
+    parser.add_argument('--no-visualize', action='store_true', help='禁用可视化')
+    args = parser.parse_args()
 
-    # load and visualize t-pose files
-    source_tpose = SkeletonState.from_file(retarget_data["source_tpose"])
-    if VISUALIZE:
-        plot_skeleton_state(source_tpose)
+    try:
+        # load retarget config
+        retarget_data_path = "ase/poselib/data/configs/retarget_cmu_to_amp.json"
+        print(f"正在加载配置文件: {retarget_data_path}")
+        with open(retarget_data_path) as f:
+            retarget_data = json.load(f)
 
-    target_tpose = SkeletonState.from_file(retarget_data["target_tpose"])
-    if VISUALIZE:
-        plot_skeleton_state(target_tpose)
+        # load and visualize t-pose files
+        print("正在加载源骨骼 T-pose...")
+        source_tpose = SkeletonState.from_file(retarget_data["source_tpose"])
+        if not args.no_visualize:
+            plot_skeleton_state(source_tpose)
 
-    # load and visualize source motion sequence
-    source_motion = SkeletonMotion.from_file(retarget_data["source_motion"])
-    if VISUALIZE:
-        plot_skeleton_motion_interactive(source_motion)
+        print("正在加载目标骨骼 T-pose...")
+        target_tpose = SkeletonState.from_file(retarget_data["target_tpose"])
+        if not args.no_visualize:
+            plot_skeleton_state(target_tpose)
 
-    # parse data from retarget config
-    joint_mapping = retarget_data["joint_mapping"]
-    rotation_to_target_skeleton = torch.tensor(retarget_data["rotation"])
+        # load and visualize source motion sequence
+        print("正在加载源动作序列...")
+        source_motion = SkeletonMotion.from_file(retarget_data["source_motion"])
+        if not args.no_visualize:
+            plot_skeleton_motion_interactive(source_motion)
 
-    # run retargeting
-    target_motion = source_motion.retarget_to_by_tpose(
-      joint_mapping=retarget_data["joint_mapping"],
-      source_tpose=source_tpose,
-      target_tpose=target_tpose,
-      rotation_to_target_skeleton=rotation_to_target_skeleton,
-      scale_to_target_skeleton=retarget_data["scale"]
-    )
+        # parse data from retarget config
+        print("正在解析重定向配置...")
+        joint_mapping = retarget_data["joint_mapping"]
+        rotation_to_target_skeleton = torch.tensor(retarget_data["rotation"])
 
-    # keep frames between [trim_frame_beg, trim_frame_end - 1]
-    frame_beg = retarget_data["trim_frame_beg"]
-    frame_end = retarget_data["trim_frame_end"]
-    if (frame_beg == -1):
-        frame_beg = 0
+        # run retargeting
+        print("正在执行动作重定向...")
+        target_motion = source_motion.retarget_to_by_tpose(
+          joint_mapping=retarget_data["joint_mapping"],
+          source_tpose=source_tpose,
+          target_tpose=target_tpose,
+          rotation_to_target_skeleton=rotation_to_target_skeleton,
+          scale_to_target_skeleton=retarget_data["scale"]
+        )
+
+        # keep frames between [trim_frame_beg, trim_frame_end - 1]
+        print("正在裁剪动作帧...")
+        frame_beg = retarget_data["trim_frame_beg"]
+        frame_end = retarget_data["trim_frame_end"]
+        if (frame_beg == -1):
+            frame_beg = 0
+            
+        if (frame_end == -1):
+            frame_end = target_motion.local_rotation.shape[0]
+            
+        local_rotation = target_motion.local_rotation
+        root_translation = target_motion.root_translation
+        local_rotation = local_rotation[frame_beg:frame_end, ...]
+        root_translation = root_translation[frame_beg:frame_end, ...]
+          
+        new_sk_state = SkeletonState.from_rotation_and_root_translation(target_motion.skeleton_tree, local_rotation, root_translation, is_local=True)
+        target_motion = SkeletonMotion.from_skeleton_state(new_sk_state, fps=target_motion.fps)
+
+        # need to convert some joints from 3D to 1D (e.g. elbows and knees)
+        print("正在处理关节角度...")
+        target_motion = project_joints(target_motion)
+
+        # move the root so that the feet are on the ground
+        print("正在调整根节点位置...")
+        local_rotation = target_motion.local_rotation
+        root_translation = target_motion.root_translation
+        tar_global_pos = target_motion.global_translation
+        min_h = torch.min(tar_global_pos[..., 2])
+        root_translation[:, 2] += -min_h
         
-    if (frame_end == -1):
-        frame_end = target_motion.local_rotation.shape[0]
+        # adjust the height of the root to avoid ground penetration
+        root_height_offset = retarget_data["root_height_offset"]
+        root_translation[:, 2] += root_height_offset
         
-    local_rotation = target_motion.local_rotation
-    root_translation = target_motion.root_translation
-    local_rotation = local_rotation[frame_beg:frame_end, ...]
-    root_translation = root_translation[frame_beg:frame_end, ...]
-      
-    new_sk_state = SkeletonState.from_rotation_and_root_translation(target_motion.skeleton_tree, local_rotation, root_translation, is_local=True)
-    target_motion = SkeletonMotion.from_skeleton_state(new_sk_state, fps=target_motion.fps)
+        new_sk_state = SkeletonState.from_rotation_and_root_translation(target_motion.skeleton_tree, local_rotation, root_translation, is_local=True)
+        target_motion = SkeletonMotion.from_skeleton_state(new_sk_state, fps=target_motion.fps)
 
-    # need to convert some joints from 3D to 1D (e.g. elbows and knees)
-    target_motion = project_joints(target_motion)
+        # save retargeted motion
+        print(f"正在保存重定向后的动作到: {retarget_data['target_motion_path']}")
+        target_motion.to_file(retarget_data["target_motion_path"])
 
-    # move the root so that the feet are on the ground
-    local_rotation = target_motion.local_rotation
-    root_translation = target_motion.root_translation
-    tar_global_pos = target_motion.global_translation
-    min_h = torch.min(tar_global_pos[..., 2])
-    root_translation[:, 2] += -min_h
-    
-    # adjust the height of the root to avoid ground penetration
-    root_height_offset = retarget_data["root_height_offset"]
-    root_translation[:, 2] += root_height_offset
-    
-    new_sk_state = SkeletonState.from_rotation_and_root_translation(target_motion.skeleton_tree, local_rotation, root_translation, is_local=True)
-    target_motion = SkeletonMotion.from_skeleton_state(new_sk_state, fps=target_motion.fps)
-
-    # save retargeted motion
-    target_motion.to_file(retarget_data["target_motion_path"])
-
-    # visualize retargeted motion
-    plot_skeleton_motion_interactive(target_motion)
-    
-    return
+        # visualize retargeted motion
+        if not args.no_visualize:
+            print("正在显示重定向后的动作...")
+            plot_skeleton_motion_interactive(target_motion)
+        else:
+            print("已禁用可视化，重定向完成。")
+        
+    except Exception as e:
+        print(f"发生错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return
 
 if __name__ == '__main__':
     main()

@@ -29,22 +29,32 @@
 
 import os
 import json
+import argparse
 
 from poselib.skeleton.skeleton3d import SkeletonTree, SkeletonState, SkeletonMotion
 from poselib.visualization.common import plot_skeleton_state, plot_skeleton_motion_interactive
 
-# source fbx file path
-fbx_file = "data/01_01_cmu.fbx"
+def main():
+    parser = argparse.ArgumentParser(description='FBX to NPY converter')
+    parser.add_argument('--no-visualize', action='store_true', help='Disable visualization')
+    args = parser.parse_args()
 
-# import fbx file - make sure to provide a valid joint name for root_joint
-motion = SkeletonMotion.from_fbx(
-    fbx_file_path=fbx_file,
-    root_joint="Hips",
-    fps=60
-)
+    # source fbx file path
+    fbx_file = "ase/poselib/data/01_01_cmu.fbx"
 
-# save motion in npy format
-motion.to_file("data/01_01_cmu.npy")
+    # import fbx file - make sure to provide a valid joint name for root_joint
+    motion = SkeletonMotion.from_fbx(
+        fbx_file_path=fbx_file,
+        root_joint="Hips",
+        fps=60
+    )
 
-# visualize motion
-plot_skeleton_motion_interactive(motion)
+    # save motion in npy format
+    motion.to_file("ase/poselib/data/01_01_cmu.npy")
+
+    # visualize motion if not disabled
+    if not args.no_visualize:
+        plot_skeleton_motion_interactive(motion)
+
+if __name__ == '__main__':
+    main()

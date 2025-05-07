@@ -1,8 +1,8 @@
 {
-    "source_motion": "data/01_01_cmu.npy",
-    "target_motion_path": "data/01_01_cmu_amp.npy",
-    "source_tpose": "data/cmu_tpose.npy",
-    "target_tpose": "data/amp_humanoid_tpose.npy",
+    "source_motion": "ase/poselib/data/01_01_cmu.npy",
+    "target_motion_path": "ase/poselib/data/01_01_cmu_amp.npy",
+    "source_tpose": "ase/poselib/data/cmu_tpose.npy",
+    "target_tpose": "ase/poselib/data/amp_humanoid_tpose.npy",
     "joint_mapping": {
          "Hips": "pelvis",
          "LeftUpLeg": "left_thigh",
